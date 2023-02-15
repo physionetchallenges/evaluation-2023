@@ -38,7 +38,7 @@ def compute_challenge_score(labels, outputs):
     assert len(labels) == len(outputs)
     num_instances = len(labels)
 
-    # Collect the unique output values as the thresholds for the positive and negative classes.
+    # Use the unique output values as the thresholds for the positive and negative classes.
     thresholds = np.unique(outputs)
     thresholds = np.append(thresholds, thresholds[-1]+1)
     thresholds = thresholds[::-1]
@@ -80,12 +80,12 @@ def compute_challenge_score(labels, outputs):
     for j in range(num_thresholds):
         if tp[j] + fn[j] > 0:
             tpr[j] = float(tp[j]) / float(tp[j] + fn[j])
-            fpr[j] = float(fp[j]) / float(tp[j] + fn[j])
+            fpr[j] = float(fp[j]) / float(fp[j] + tn[j])
         else:
             tpr[j] = float('nan')
             fpr[j] = float('nan')
 
-    # Find the largest TPR such that FPR < 0.05.
+    # Find the largest TPR such that FPR <= 0.05.
     max_fpr = 0.05
     max_tpr = float('nan')
     if np.any(fpr <= max_fpr):
@@ -99,7 +99,7 @@ def compute_auc(labels, outputs):
     assert len(labels) == len(outputs)
     num_instances = len(labels)
 
-    # Collect the unique output values as the thresholds for the positive and negative classes.
+    # Use the unique output values as the thresholds for the positive and negative classes.
     thresholds = np.unique(outputs)
     thresholds = np.append(thresholds, thresholds[-1]+1)
     thresholds = thresholds[::-1]
