@@ -17,16 +17,48 @@ from helper_code import *
 
 # Evaluate the models.
 def evaluate_model(label_folder, output_folder):
-    # Load labels and model outputs.
-    patient_ids, label_outcomes, label_cpcs = load_challenge_labels(label_folder)
-    output_outcomes, output_outcome_probabilities, output_cpcs = load_challenge_outputs(output_folder, patient_ids)
+    # Load the labels.
+    patient_ids = find_data_folders(label_folder)
+    num_patients = len(patient_ids)
+
+    hospitals = list()
+    label_outcomes = list()
+    label_cpcs = list()
+
+    for i in range(num_patients):
+        patient_data_file = os.path.join(label_folder, patient_ids[i], patient_ids[i] + '.txt')
+        patient_data = load_text_file(patient_data_file)
+
+        hospital = get_hospital(patient_data)
+        label_outcome = get_outcome(patient_data)
+        label_cpc = get_cpc(patient_data)
+
+        hospitals.append(hospital)
+        label_outcomes.append(label_outcome)
+        label_cpcs.append(label_cpc)
+
+    # Load the model outputs.
+    output_outcomes = list()
+    output_outcome_probabilities = list()
+    output_cpcs = list()
+
+    for i in range(num_patients):
+        output_file = os.path.join(output_folder, patient_ids[i], patient_ids[i] + '.txt')
+        output_data = load_text_file(output_file)
+
+        output_outcome = get_outcome(output_data)
+        output_outcome_probability = get_outcome_probability(output_data)
+        output_cpc = get_cpc(output_data)
+
+        output_outcomes.append(output_outcome)
+        output_outcome_probabilities.append(output_outcome_probability)
+        output_cpcs.append(output_cpc)
 
     # Evaluate the models.
-    challenge_score = compute_challenge_score(label_outcomes, output_outcome_probabilities)
+    challenge_score = compute_challenge_score(label_outcomes, output_outcome_probabilities, hospitals)
     auroc_outcomes, auprc_outcomes = compute_auc(label_outcomes, output_outcome_probabilities)
     accuracy_outcomes, _, _ = compute_accuracy(label_outcomes, output_outcomes)
     f_measure_outcomes, _, _ = compute_f_measure(label_outcomes, output_outcomes)
-
     mse_cpcs = compute_mse(label_cpcs, output_cpcs)
     mae_cpcs = compute_mae(label_cpcs, output_cpcs)
 
@@ -34,63 +66,99 @@ def evaluate_model(label_folder, output_folder):
     return challenge_score, auroc_outcomes, auprc_outcomes, accuracy_outcomes, f_measure_outcomes, mse_cpcs, mae_cpcs
 
 # Compute the Challenge score.
-def compute_challenge_score(labels, outputs):
+def compute_challenge_score(labels, outputs, hospitals):
+    # Check the data.
     assert len(labels) == len(outputs)
-    num_instances = len(labels)
 
-    # Use the unique output values as the thresholds for the positive and negative classes.
-    thresholds = np.unique(outputs)
-    thresholds = np.append(thresholds, thresholds[-1]+1)
-    thresholds = thresholds[::-1]
-    num_thresholds = len(thresholds)
+    # Convert the data to NumPy arrays for easier indexing.
+    labels = np.asarray(labels, dtype=np.float64)
+    outputs = np.asarray(outputs, dtype=np.float64)
 
-    idx = np.argsort(outputs)[::-1]
+    # Identify the unique hospitals.
+    unique_hospitals = sorted(set(hospitals))
+    num_hospitals = len(unique_hospitals)
 
-    # Initialize the TPs, FPs, FNs, and TNs with no positive outputs.
-    tp = np.zeros(num_thresholds)
-    fp = np.zeros(num_thresholds)
-    fn = np.zeros(num_thresholds)
-    tn = np.zeros(num_thresholds)
+    # Initialize a confusion matrix for each hospital.
+    tps = np.zeros(num_hospitals)
+    fps = np.zeros(num_hospitals)
+    fns = np.zeros(num_hospitals)
+    tns = np.zeros(num_hospitals)
 
-    tp[0] = 0
-    fp[0] = 0
-    fn[0] = np.sum(labels == 1)
-    tn[0] = np.sum(labels == 0)
+    # Compute the confusion matrix at each output threshold separately for each hospital.
+    for i, hospital in enumerate(unique_hospitals):
+        idx = [j for j, x in enumerate(hospitals) if x == hospital]
+        current_labels = labels[idx]
+        current_outputs = outputs[idx]
+        num_instances = len(current_labels)
 
-    # Update the TPs, FPs, FNs, and TNs using the values at the previous threshold.
-    i = 0
-    for j in range(1, num_thresholds):
-        tp[j] = tp[j-1]
-        fp[j] = fp[j-1]
-        fn[j] = fn[j-1]
-        tn[j] = tn[j-1]
+        # Collect the unique output values as the thresholds for the positive and negative classes.
+        thresholds = np.unique(current_outputs)
+        thresholds = np.append(thresholds, thresholds[-1]+1)
+        thresholds = thresholds[::-1]
+        num_thresholds = len(thresholds)
 
-        while i < num_instances and outputs[idx[i]] >= thresholds[j]:
-            if labels[idx[i]]:
-                tp[j] += 1
-                fn[j] -= 1
+        idx = np.argsort(current_outputs)[::-1]
+
+        # Initialize the TPs, FPs, FNs, and TNs with no positive outputs.
+        tp = np.zeros(num_thresholds)
+        fp = np.zeros(num_thresholds)
+        fn = np.zeros(num_thresholds)
+        tn = np.zeros(num_thresholds)
+
+        tp[0] = 0
+        fp[0] = 0
+        fn[0] = np.sum(current_labels == 1)
+        tn[0] = np.sum(current_labels == 0)
+
+        # Update the TPs, FPs, FNs, and TNs using the values at the previous threshold.
+        k = 0
+        for l in range(1, num_thresholds):
+            tp[l] = tp[l-1]
+            fp[l] = fp[l-1]
+            fn[l] = fn[l-1]
+            tn[l] = tn[l-1]
+
+            while k < num_instances and current_outputs[idx[k]] >= thresholds[l]:
+                if current_labels[idx[k]] == 1:
+                    tp[l] += 1
+                    fn[l] -= 1
+                else:
+                    fp[l] += 1
+                    tn[l] -= 1
+                k += 1
+
+            # Compute the FPRs.
+            fpr = np.zeros(num_thresholds)
+            for l in range(num_thresholds):
+                if tp[l] + fn[l] > 0:
+                    fpr[l] = float(fp[l]) / float(tp[l] + fn[l])
+                else:
+                    fpr[l] = float('nan')
+
+            # Find the threshold such that FPR <= 0.05.
+            max_fpr = 0.05
+            if np.any(fpr <= max_fpr):
+                l = max(l for l, x in enumerate(fpr) if x <= max_fpr)
+                tps[i] = tp[l]
+                fps[i] = fp[l]
+                fns[i] = fn[l]
+                tns[i] = tn[l]
             else:
-                fp[j] += 1
-                tn[j] -= 1
-            i += 1
+                tps[i] = tp[0]
+                fps[i] = fp[0]
+                fns[i] = fn[0]
+                tns[i] = tn[0]
 
-    # Compute the TPRs and FPRs.
-    tpr = np.zeros(num_thresholds)
-    fpr = np.zeros(num_thresholds)
-    for j in range(num_thresholds):
-        if tp[j] + fn[j] > 0:
-            tpr[j] = float(tp[j]) / float(tp[j] + fn[j])
-            fpr[j] = float(fp[j]) / float(fp[j] + tn[j])
-        else:
-            tpr[j] = float('nan')
-            fpr[j] = float('nan')
+    # Compute the TPR at FPR <= 0.05 for each hospital.
+    tp = np.sum(tps)
+    fp = np.sum(fps)
+    fn = np.sum(fns)
+    tn = np.sum(tns)
 
-    # Find the largest TPR such that FPR <= 0.05.
-    max_fpr = 0.05
-    max_tpr = float('nan')
-    if np.any(fpr <= max_fpr):
-        indices = np.where(fpr <= max_fpr)
-        max_tpr = np.max(tpr[indices])
+    if tp + fn > 0:
+        max_tpr = tp / (tp + fn)
+    else:
+        max_tpr = float('nan')
 
     return max_tpr
 
@@ -99,7 +167,11 @@ def compute_auc(labels, outputs):
     assert len(labels) == len(outputs)
     num_instances = len(labels)
 
-    # Use the unique output values as the thresholds for the positive and negative classes.
+    # Convert the data to NumPy arrays for easier indexing.
+    labels = np.asarray(labels, dtype=np.float64)
+    outputs = np.asarray(outputs, dtype=np.float64)
+
+    # Collect the unique output values as the thresholds for the positive and negative classes.
     thresholds = np.unique(outputs)
     thresholds = np.append(thresholds, thresholds[-1]+1)
     thresholds = thresholds[::-1]
@@ -127,7 +199,7 @@ def compute_auc(labels, outputs):
         tn[j] = tn[j-1]
 
         while i < num_instances and outputs[idx[i]] >= thresholds[j]:
-            if labels[idx[i]]:
+            if labels[idx[i]] == 1:
                 tp[j] += 1
                 fn[j] -= 1
             else:
@@ -140,16 +212,16 @@ def compute_auc(labels, outputs):
     tnr = np.zeros(num_thresholds)
     ppv = np.zeros(num_thresholds)
     for j in range(num_thresholds):
-        if tp[j] + fn[j]:
-            tpr[j] = float(tp[j]) / float(tp[j] + fn[j])
+        if tp[j] + fn[j] > 0:
+            tpr[j] = tp[j] / (tp[j] + fn[j])
         else:
             tpr[j] = float('nan')
-        if fp[j] + tn[j]:
-            tnr[j] = float(tn[j]) / float(fp[j] + tn[j])
+        if fp[j] + tn[j] > 0:
+            tnr[j] = tn[j] / (fp[j] + tn[j])
         else:
             tnr[j] = float('nan')
-        if tp[j] + fp[j]:
-            ppv[j] = float(tp[j]) / float(tp[j] + fp[j])
+        if tp[j] + fp[j] > 0:
+            ppv[j] = tp[j] / (tp[j] + fp[j])
         else:
             ppv[j] = float('nan')
 
