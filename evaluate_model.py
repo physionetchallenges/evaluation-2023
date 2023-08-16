@@ -127,27 +127,27 @@ def compute_challenge_score(labels, outputs, hospitals):
                     tn[l] -= 1
                 k += 1
 
-            # Compute the FPRs.
-            fpr = np.zeros(num_thresholds)
-            for l in range(num_thresholds):
-                if tp[l] + fn[l] > 0:
-                    fpr[l] = float(fp[l]) / float(tp[l] + fn[l])
-                else:
-                    fpr[l] = float('nan')
-
-            # Find the threshold such that FPR <= 0.05.
-            max_fpr = 0.05
-            if np.any(fpr <= max_fpr):
-                l = max(l for l, x in enumerate(fpr) if x <= max_fpr)
-                tps[i] = tp[l]
-                fps[i] = fp[l]
-                fns[i] = fn[l]
-                tns[i] = tn[l]
+        # Compute the FPRs.
+        fpr = np.zeros(num_thresholds)
+        for l in range(num_thresholds):
+            if tp[l] + fn[l] > 0:
+                fpr[l] = float(fp[l]) / float(tp[l] + fn[l])
             else:
-                tps[i] = tp[0]
-                fps[i] = fp[0]
-                fns[i] = fn[0]
-                tns[i] = tn[0]
+                fpr[l] = float('nan')
+
+        # Find the threshold such that FPR <= 0.05.
+        max_fpr = 0.05
+        if np.any(fpr <= max_fpr):
+            l = max(l for l, x in enumerate(fpr) if x <= max_fpr)
+            tps[i] = tp[l]
+            fps[i] = fp[l]
+            fns[i] = fn[l]
+            tns[i] = tn[l]
+        else:
+            tps[i] = tp[0]
+            fps[i] = fp[0]
+            fns[i] = fn[0]
+            tns[i] = tn[0]
 
     # Compute the TPR at FPR <= 0.05 for each hospital.
     tp = np.sum(tps)
